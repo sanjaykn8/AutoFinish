@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+backend/artifacts/*
+!backend/artifacts/.gitkeep
+frontend/node_modules/
+frontend/dist/
