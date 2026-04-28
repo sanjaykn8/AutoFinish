@@ -228,3 +228,30 @@ button, textarea {
     position: static;
   }
 }
+
+/* Fix #2 — mode badge and word-mode button styles */
+.suggestion-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mode-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  vertical-align: middle;
+}
+
+.suggestion-item.word-mode {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+.suggestion-item.word-mode:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}

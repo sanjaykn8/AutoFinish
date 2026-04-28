@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchHealth, fetchPrediction } from './api'
 
-const DEBOUNCE_MS = 220
+const DEBOUNCE_MS = 180   // Fix #3 — slightly tighter debounce (was 220ms)
 
 function App() {
   const [text, setText] = useState('')
   const [ghostText, setGhostText] = useState('')
   const [candidates, setCandidates] = useState([])
+  const [predMode, setPredMode] = useState('letter')   // Fix #2 — 'letter' | 'word'
   const [status, setStatus] = useState('Checking backend...')
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
@@ -33,6 +34,7 @@ function App() {
       if (!text.trim()) {
         setGhostText('')
         setCandidates([])
+        setPredMode('letter')
         setError('')
         return
       }
@@ -42,11 +44,13 @@ function App() {
         if (currentRequest !== requestIdRef.current) return
         setGhostText(result.ghost_text || '')
         setCandidates(result.candidates || [])
+        setPredMode(result.mode || 'letter')   // Fix #2
         setError('')
       } catch (err) {
         if (currentRequest !== requestIdRef.current) return
         setGhostText('')
         setCandidates([])
+        setPredMode('letter')
         setError(err.message || 'Prediction failed')
       }
     }, DEBOUNCE_MS)
@@ -65,6 +69,8 @@ function App() {
   const acceptSuggestion = (completion) => {
     if (!completion) return
     setText((prev) => {
+      // Fix #2 — when in word mode (after space), just append the word.
+      // When in letter mode, append the completion (rest of current word).
       const next = prev + completion
       window.requestAnimationFrame(() => {
         const el = textareaRef.current
@@ -85,7 +91,6 @@ function App() {
       acceptSuggestion(ghostText)
       return
     }
-
     if (event.key === 'Tab') {
       event.preventDefault()
       return
@@ -93,6 +98,13 @@ function App() {
   }
 
   const ghostDisplay = useMemo(() => ghostText || '', [ghostText])
+
+  // Fix #2 — label changes based on prediction mode
+  const panelTitle = predMode === 'word' ? 'Next word predictions' : 'Top suggestions'
+  const hintText =
+    predMode === 'word'
+      ? 'After a space — click a word to insert it, or press Tab for the top pick.'
+      : 'Completing current word. Tab to accept, or click a suggestion.'
 
   return (
     <div className="app-shell">
@@ -133,9 +145,7 @@ function App() {
         </div>
 
         <div className="footer-row">
-          <div className="hint">
-            Inline completion is appended to the current text. Tab confirms it.
-          </div>
+          <div className="hint">{hintText}</div>
           <div className="meta">
             {error ? <span className="error-text">{error}</span> : null}
           </div>
@@ -143,7 +153,13 @@ function App() {
       </div>
 
       <div className="suggestion-panel">
-        <div className="suggestion-title">Top suggestions</div>
+        {/* Fix #2 — show mode badge next to panel title */}
+        <div className="suggestion-title">
+          {panelTitle}
+          {predMode === 'word' && (
+            <span className="mode-badge">NEXT WORD</span>
+          )}
+        </div>
         {candidates.length === 0 ? (
           <div className="suggestion-empty">No suggestion yet.</div>
         ) : (
@@ -152,7 +168,7 @@ function App() {
               <button
                 key={`${item.completion}-${idx}`}
                 type="button"
-                className="suggestion-item"
+                className={`suggestion-item${predMode === 'word' ? ' word-mode' : ''}`}
                 onClick={() => acceptSuggestion(item.completion)}
               >
                 <span className="suggestion-rank">#{idx + 1}</span>
