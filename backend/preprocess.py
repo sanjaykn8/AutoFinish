@@ -1,108 +1,175 @@
+"""
+preprocess.py
+─────────────
+Data loading, normalization, and vocabulary construction.
+
+Supports:
+  • Shakespeare CSV (primary corpus)
+  • Optional supplementary plain-text corpus
+  • Character-level vocabulary
+  • Word-level token sequences
+"""
 
 from __future__ import annotations
 
 import csv
+import json
 import os
 import re
+from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional, Tuple
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+SHAKESPEARE_CSV = DATA_DIR / "Shakespeare.csv"
+
+# Characters we keep in the corpus (printable ASCII subset meaningful for language)
+ALLOWED_CHARS_RE = re.compile(r"[^a-z0-9\s.,!?;:'\"\-\(\)]")
+
+# Valid word pattern: letters, optional apostrophe, letters
+VALID_WORD_RE = re.compile(r"^[a-z][a-z'\-]{0,29}$")
 
 
-DEFAULT_SAMPLE_PATH = Path(__file__).resolve().parents[1] / "data" / "sample_shakespeare.csv"
-
+# ─── Text normalisation ────────────────────────────────────────────────────────
 
 def normalize_text(text: str) -> str:
-    """
-    Normalizes Shakespeare lines for a character-level model.
-    Keeps punctuation and apostrophes because they matter for character prediction.
-    """
-    text = str(text).replace("\r", " ").replace("\n", " ")
+    """Lowercase, collapse whitespace, strip stray Unicode."""
+    text = str(text)
+    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
     text = text.lower()
+    # Normalise quotes / apostrophes
+    text = text.replace("\u2018", "'").replace("\u2019", "'")
+    text = text.replace("\u201c", '"').replace("\u201d", '"')
+    text = text.replace("`", "'")
+    # Remove non-ASCII junk
+    text = ALLOWED_CHARS_RE.sub("", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
-def load_lines_from_csv(path: str | os.PathLike, text_column: str = "PlayerLine") -> List[str]:
-    path = Path(path)
-    lines: List[str] = []
+def tokenize(text: str) -> List[str]:
+    """Split into lowercase word tokens, keeping apostrophe forms."""
+    return re.findall(r"[a-z][a-z'\-]*", normalize_text(text))
 
+
+# ─── Corpus loading ────────────────────────────────────────────────────────────
+
+def load_shakespeare_csv(path: Path) -> List[str]:
+    """Load the PlayerLine column from the Shakespeare CSV."""
+    lines: List[str] = []
     with path.open("r", encoding="utf-8", errors="ignore", newline="") as f:
         reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            return []
-
-        candidates = [text_column, "PlayerLine", "text", "sentence", "line"]
-        chosen = next((c for c in candidates if c in reader.fieldnames), reader.fieldnames[-1])
-
+        col = next(
+            (c for c in ["PlayerLine", "text", "sentence", "line"] if c in (reader.fieldnames or [])),
+            None,
+        )
+        if col is None and reader.fieldnames:
+            col = reader.fieldnames[-1]
         for row in reader:
-            value = row.get(chosen, "")
-            if value is None:
-                continue
-            value = normalize_text(value)
-            if value:
-                lines.append(value)
-
+            if col and row.get(col):
+                val = normalize_text(row[col])
+                if val:
+                    lines.append(val)
     return lines
 
 
-def load_corpus_lines(data_path: str | os.PathLike | None = None) -> List[str]:
+def load_plain_text(path: Path) -> List[str]:
+    """Load a plain-text file, split on sentence boundaries."""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    text = normalize_text(text)
+    # Split on period / exclamation / question followed by space
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    return [s.strip() for s in sentences if s.strip()]
+
+
+def load_corpus_lines(data_path: Optional[str | Path] = None) -> List[str]:
     """
-    Uses:
-      1) explicit data_path if provided
-      2) ./data/Shakespeare.csv if present
-      3) bundled sample file
+    Load corpus lines from:
+      1. Explicit path (if given)
+      2. data/Shakespeare.csv
+      3. Minimal fallback
     """
     if data_path:
         p = Path(data_path)
         if p.exists():
-            lines = load_lines_from_csv(p)
+            if p.suffix.lower() == ".csv":
+                lines = load_shakespeare_csv(p)
+            else:
+                lines = load_plain_text(p)
             if lines:
                 return lines
 
-    project_root = Path(__file__).resolve().parents[1]
-    candidates = [
-        project_root / "data" / "Shakespeare.csv",
-        project_root / "data" / "sample_shakespeare.csv",
-        DEFAULT_SAMPLE_PATH,
-    ]
+    if SHAKESPEARE_CSV.exists():
+        return load_shakespeare_csv(SHAKESPEARE_CSV)
 
-    for p in candidates:
-        if p.exists():
-            lines = load_lines_from_csv(p)
-            if lines:
-                return lines
-
+    # Hardcoded fallback so the project never crashes
     return [
         "to be or not to be that is the question",
-        "all that glitters is not gold",
+        "all the world is a stage and all the men and women merely players",
         "the course of true love never did run smooth",
+        "what a piece of work is man",
+        "brevity is the soul of wit",
     ]
 
 
-def build_corpus_text(lines: List[str]) -> str:
-    """
-    Joins lines into a single training corpus.
-    Newlines preserve sentence boundaries.
-    """
+# ─── Corpus building ──────────────────────────────────────────────────────────
+
+def build_corpus_text(lines: List[str], separator: str = "\n") -> str:
+    """Join normalized lines with separator."""
     clean = [normalize_text(x) for x in lines]
-    clean = [x for x in clean if x]
-    return "\n".join(clean)
+    return separator.join(x for x in clean if x)
 
 
-def build_vocab(text: str):
+def build_word_token_sequence(lines: List[str]) -> List[str]:
+    """Flat list of word tokens across all corpus lines."""
+    tokens: List[str] = []
+    for line in lines:
+        tokens.extend(tokenize(line))
+    return tokens
+
+
+# ─── Character vocabulary ──────────────────────────────────────────────────────
+
+def build_char_vocab(text: str) -> Tuple[Dict[str, int], Dict[int, str]]:
     chars = sorted(set(text))
+    # Guarantee newline is always in vocab
     if "\n" not in chars:
-        chars.append("\n")
-        chars = sorted(set(chars))
-
+        chars = sorted(set(chars) | {"\n"})
     stoi = {ch: i for i, ch in enumerate(chars)}
     itos = {i: ch for ch, i in stoi.items()}
     return stoi, itos
 
 
-def encode_text(text: str, stoi: dict[str, int]) -> list[int]:
+def encode_text(text: str, stoi: Dict[str, int]) -> List[int]:
     return [stoi[ch] for ch in text if ch in stoi]
 
 
-def decode_ids(ids: list[int], itos: dict[int, str]) -> str:
+def decode_ids(ids: List[int], itos: Dict[int, str]) -> str:
     return "".join(itos[i] for i in ids if i in itos)
+
+
+# ─── Word frequency / lexicon ─────────────────────────────────────────────────
+
+def build_word_freq(tokens: List[str], min_count: int = 2) -> Dict[str, int]:
+    """Count word frequencies, filtering rare words and invalid tokens."""
+    counter = Counter(tokens)
+    return {
+        word: count
+        for word, count in counter.items()
+        if count >= min_count and VALID_WORD_RE.match(word)
+    }
+
+
+# ─── Persistence helpers ───────────────────────────────────────────────────────
+
+def save_json(obj, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
+def load_json(path: Path):
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)

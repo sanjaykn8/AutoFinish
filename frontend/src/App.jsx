@@ -1,185 +1,91 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchHealth, fetchPrediction } from './api'
+import React, { useEffect, useState } from 'react'
+import EditorView    from './views/EditorView.jsx'
+import AnalyticsView from './views/AnalyticsView.jsx'
+import ModelView     from './views/ModelView.jsx'
+import { api }       from './api.js'
 
-const DEBOUNCE_MS = 180   // Fix #3 — slightly tighter debounce (was 220ms)
+const VIEWS = [
+  { id: 'editor',    label: 'Editor',    icon: '✍️' },
+  { id: 'analytics', label: 'Analytics', icon: '📈' },
+  { id: 'model',     label: 'Model',     icon: '🧠' },
+]
 
-function App() {
-  const [text, setText] = useState('')
-  const [ghostText, setGhostText] = useState('')
-  const [candidates, setCandidates] = useState([])
-  const [predMode, setPredMode] = useState('letter')   // Fix #2 — 'letter' | 'word'
-  const [status, setStatus] = useState('Checking backend...')
-  const [ready, setReady] = useState(false)
-  const [error, setError] = useState('')
-  const textareaRef = useRef(null)
-  const mirrorRef = useRef(null)
-  const requestIdRef = useRef(0)
+export default function App() {
+  const [view, setView]     = useState('editor')
+  const [health, setHealth] = useState(null)
+  const [hStatus, setHStatus] = useState('loading')  // loading | ready | error
 
   useEffect(() => {
-    fetchHealth()
-      .then((data) => {
-        setReady(Boolean(data.model_ready))
-        setStatus(data.model_ready ? 'Model loaded' : 'Train the backend model first')
-      })
-      .catch(() => {
-        setReady(false)
-        setStatus('Backend offline')
-      })
+    const check = () => {
+      api.health()
+        .then(h => { setHealth(h); setHStatus(h.model_ready ? 'ready' : 'error') })
+        .catch(() => setHStatus('error'))
+    }
+    check()
+    const id = setInterval(check, 20_000)
+    return () => clearInterval(id)
   }, [])
 
-  useEffect(() => {
-    const id = window.setTimeout(async () => {
-      const currentRequest = ++requestIdRef.current
-
-      if (!text.trim()) {
-        setGhostText('')
-        setCandidates([])
-        setPredMode('letter')
-        setError('')
-        return
-      }
-
-      try {
-        const result = await fetchPrediction(text, 5, 0.8)
-        if (currentRequest !== requestIdRef.current) return
-        setGhostText(result.ghost_text || '')
-        setCandidates(result.candidates || [])
-        setPredMode(result.mode || 'letter')   // Fix #2
-        setError('')
-      } catch (err) {
-        if (currentRequest !== requestIdRef.current) return
-        setGhostText('')
-        setCandidates([])
-        setPredMode('letter')
-        setError(err.message || 'Prediction failed')
-      }
-    }, DEBOUNCE_MS)
-
-    return () => window.clearTimeout(id)
-  }, [text])
-
-  useEffect(() => {
-    const textarea = textareaRef.current
-    const mirror = mirrorRef.current
-    if (!textarea || !mirror) return
-    mirror.scrollTop = textarea.scrollTop
-    mirror.scrollLeft = textarea.scrollLeft
-  }, [text, ghostText])
-
-  const acceptSuggestion = (completion) => {
-    if (!completion) return
-    setText((prev) => {
-      // Fix #2 — when in word mode (after space), just append the word.
-      // When in letter mode, append the completion (rest of current word).
-      const next = prev + completion
-      window.requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (el) {
-          el.focus()
-          el.setSelectionRange(next.length, next.length)
-        }
-      })
-      return next
-    })
-    setGhostText('')
-    setCandidates([])
-  }
-
-  const handleKeyDown = (event) => {
-    if (event.key === 'Tab' && ghostText) {
-      event.preventDefault()
-      acceptSuggestion(ghostText)
-      return
-    }
-    if (event.key === 'Tab') {
-      event.preventDefault()
-      return
-    }
-  }
-
-  const ghostDisplay = useMemo(() => ghostText || '', [ghostText])
-
-  // Fix #2 — label changes based on prediction mode
-  const panelTitle = predMode === 'word' ? 'Next word predictions' : 'Top suggestions'
-  const hintText =
-    predMode === 'word'
-      ? 'After a space — click a word to insert it, or press Tab for the top pick.'
-      : 'Completing current word. Tab to accept, or click a suggestion.'
-
   return (
-    <div className="app-shell">
-      <div className="top-bar">
-        <div>
-          <h1>Shakespeare Autocomplete</h1>
-          <p>Character-level LSTM autocomplete with inline next-word suggestion.</p>
-        </div>
-        <div className={`status-pill ${ready ? 'ok' : 'warn'}`}>
-          {status}
-        </div>
-      </div>
-
-      <div className="editor-card">
-        <div className="editor-label">
-          Type below. Press <kbd>Tab</kbd> to accept the suggestion.
+    <div className="app-root">
+      {/* ── Top bar ─────────────────────────────────────────────────────── */}
+      <header className="topbar">
+        <div className="topbar-brand">
+          <span className="topbar-logo">Lexis</span>
+          <span className="topbar-sub">Hybrid Autocomplete Engine</span>
         </div>
 
-        <div className="editor-wrap">
-          <div className="editor-mirror" ref={mirrorRef} aria-hidden="true">
-            <span>{text}</span>
-            <span className="ghost">{ghostDisplay}</span>
-            <span className="caret-space"> </span>
+        <div className="topbar-status">
+          <div className="model-badges">
+            <span className={`model-badge ${health?.char_model  ? 'active' : 'inactive'}`}>
+              CharLSTM
+            </span>
+            <span className={`model-badge ${health?.ngram_model ? 'active' : 'inactive'}`}>
+              N-gram
+            </span>
           </div>
-
-          <textarea
-            ref={textareaRef}
-            className="editor-input"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            spellCheck="false"
-            autoCapitalize="off"
-            autoComplete="off"
-            autoCorrect="off"
-            placeholder="Start typing here..."
-          />
-        </div>
-
-        <div className="footer-row">
-          <div className="hint">{hintText}</div>
-          <div className="meta">
-            {error ? <span className="error-text">{error}</span> : null}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--paper)' }}>
+            <span className={`status-dot ${hStatus}`} />
+            {hStatus === 'loading' ? 'Connecting…'
+              : hStatus === 'ready' ? 'API ready'
+              : 'API offline'}
           </div>
         </div>
-      </div>
+      </header>
 
-      <div className="suggestion-panel">
-        {/* Fix #2 — show mode badge next to panel title */}
-        <div className="suggestion-title">
-          {panelTitle}
-          {predMode === 'word' && (
-            <span className="mode-badge">NEXT WORD</span>
-          )}
-        </div>
-        {candidates.length === 0 ? (
-          <div className="suggestion-empty">No suggestion yet.</div>
-        ) : (
-          <div className="suggestion-list">
-            {candidates.map((item, idx) => (
-              <button
-                key={`${item.completion}-${idx}`}
-                type="button"
-                className={`suggestion-item${predMode === 'word' ? ' word-mode' : ''}`}
-                onClick={() => acceptSuggestion(item.completion)}
-              >
-                <span className="suggestion-rank">#{idx + 1}</span>
-                <span className="suggestion-word">{item.completion}</span>
-              </button>
-            ))}
+      {/* ── Sidebar nav ─────────────────────────────────────────────────── */}
+      <nav className="sidebar">
+        {VIEWS.map((v, i) => (
+          <React.Fragment key={v.id}>
+            {i === 2 && <div className="sidebar-sep" />}
+            <button
+              className={`nav-item${view === v.id ? ' active' : ''}`}
+              onClick={() => setView(v.id)}
+            >
+              <span className="nav-icon">{v.icon}</span>
+              {v.label}
+            </button>
+          </React.Fragment>
+        ))}
+
+        {/* bottom spacer + corpus label */}
+        <div style={{ marginTop: 'auto', padding: '20px 20px 4px' }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)', fontSize: '0.58rem',
+            color: 'rgba(255,255,255,0.18)', textTransform: 'uppercase',
+            letterSpacing: '0.1em', lineHeight: 1.6,
+          }}>
+            Corpus<br />Shakespeare<br />+ KN smoothing
           </div>
-        )}
-      </div>
+        </div>
+      </nav>
+
+      {/* ── Main ─────────────────────────────────────────────────────────── */}
+      <main className="main-content">
+        {view === 'editor'    && <EditorView    health={health} />}
+        {view === 'analytics' && <AnalyticsView />}
+        {view === 'model'     && <ModelView />}
+      </main>
     </div>
   )
 }
-
-export default App
