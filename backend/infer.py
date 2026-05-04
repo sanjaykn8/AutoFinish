@@ -575,15 +575,11 @@ class AutocompleteEngine:
         at_boundary = self._is_at_boundary(text)
         fragment = self._current_fragment(text)
         mode = "word" if at_boundary else "letter"
-
-        # Gather char-level candidates (LSTM or trie fallback)
         if self._char_ready:
             char_cands = self._char_candidates(text, top_k=top_k + 2, temperature=temperature)
         else:
             char_cands = self._trie_candidates(fragment, top_k=top_k + 2)
         ngram_cands = self._ngram_candidates(text, top_k=top_k + 2, fragment=fragment)
-
-        # Hybrid merge
         merged = self._merge_and_rank(char_cands, ngram_cands, at_boundary, top_k)
 
         if not merged:
